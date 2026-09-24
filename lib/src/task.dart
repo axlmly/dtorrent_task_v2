@@ -158,6 +158,12 @@ abstract class TorrentTask with EventsEmittable<TaskEvent> {
   /// Start to download
   Future<Map> start();
 
+  /// Initialize the task without starting any network activity.
+  ///
+  /// Loads the state file and builds the piece/file managers so per-file
+  /// progress is available for paused/restored tasks. Idempotent.
+  Future<void> prepare();
+
   // Start streaming videos
   Future<void> startStreaming();
 
@@ -765,6 +771,11 @@ class _TorrentTask
 
   void initStreaming() {
     _streamingServer ??= StreamingServer(_fileManager!, this);
+  }
+
+  @override
+  Future<void> prepare() async {
+    await _init(_metaInfo, _savePath);
   }
 
   @override
