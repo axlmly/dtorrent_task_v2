@@ -44,6 +44,23 @@ class DownloadFile {
   double get downloadProgress =>
       length == 0 ? 100 : downloadedBytes / length * 100;
 
+  /// Recompute [downloadedBytes] from the current [pieces].
+  ///
+  /// [DownloadFileManager] builds the piece list *after* constructing the
+  /// `DownloadFile`, so the constructor-time sum is always 0 for files
+  /// restored from a resume state. Call this once the list is populated.
+  void recalculateDownloadedBytes() {
+    var total = 0;
+    for (final piece in pieces) {
+      if (!piece.isCompletelyWritten) continue;
+      final position = blockToDownloadFilePosition(
+          piece.offset, piece.end, piece.byteLength, this);
+      if (position == null) continue;
+      total += position.blockEnd - position.blockStart;
+    }
+    downloadedBytes = total;
+  }
+
   File? _file;
 
   RandomAccessFile? _writeAccess;

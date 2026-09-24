@@ -234,6 +234,7 @@ class DownloadFileManager with EventsEmittable<DownloadFileManagerEvent> {
         }
       }
 
+      downloadFile.recalculateDownloadedBytes();
       _files.add(downloadFile);
     }
   }
@@ -281,6 +282,7 @@ class DownloadFileManager with EventsEmittable<DownloadFileManagerEvent> {
         }
       }
 
+      downloadFile.recalculateDownloadedBytes();
       _files.add(downloadFile);
       currentOffset = fileEnd;
     }
