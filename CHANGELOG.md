@@ -1,5 +1,7 @@
 ## Unreleased
 
+- fix magnet info hash: add `TorrentParser.parseFromInfoBytes()` so the infohash is computed from the exact raw info-dictionary bytes instead of a re-encoded map. Re-encoding changed the bytes (e.g. `pieces`) and produced a wrong infohash, so tracker announces returned no peers and downloads never started.
+- fix `_extractInfoDictBytes()` to walk bencode properly (skip string payloads) instead of a naive `d`/`e` byte scan, which cut the info dict at the wrong place when string values contained those bytes.
 - fix BEP 09 magnet metadata download: resolve incoming extended-message ids against the local `m` map instead of the peer's map, evict disposed peers from the metadata peer set, and rotate metadata piece requests across peers that actually advertise `ut_metadata` (previously a single dead/slow peer could block the whole metadata fetch forever)
 - skip unroutable DHT bootstrap addresses (`0.0.0.0`, `::`, broadcast) in standalone driver instead of sending `find_node` datagrams to them
 - drop dead UDP sockets in standalone DHT driver so the next bootstrap binds fresh ones instead of reusing closed socket references across retries

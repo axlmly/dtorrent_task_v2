@@ -46,9 +46,47 @@ class TorrentParser {
     return _parseTorrent(torrentMap, encoded);
   }
 
+  /// Parse a torrent model from the raw bencoded **info dictionary** bytes
+  /// (the payload delivered by BEP 09 magnet metadata exchange).
+  ///
+  /// The info hash is computed directly from [infoBytes], so it matches the
+  /// magnet link's infohash exactly. Re-encoding a decoded map can change the
+  /// bytes (e.g. `pieces`), which would produce a different hash and make
+  /// tracker announces fail.
+  ///
+  /// [announces] are attached so the task announces to the magnet trackers,
+  /// and [nodes] are attached as DHT bootstrap nodes.
+  static TorrentModel parseFromInfoBytes(
+    Uint8List infoBytes, {
+    List<Uri> announces = const [],
+    List<Uri> nodes = const [],
+  }) {
+    final decoded = decode(infoBytes);
+    if (decoded is! Map) {
+      throw FormatException(
+          'Invalid info dictionary: root must be a dictionary');
+    }
+    final data = <String, dynamic>{
+      'info': Map<String, dynamic>.from(decoded),
+    };
+    if (announces.isNotEmpty) {
+      data['announce'] = announces.first.toString();
+      data['announce-list'] = [
+        for (final a in announces) [a.toString()],
+      ];
+    }
+    if (nodes.isNotEmpty) {
+      data['nodes'] = [
+        for (final n in nodes) [n.host, n.port],
+      ];
+    }
+    return _parseTorrent(data, null, explicitInfoBytes: infoBytes);
+  }
+
   /// Parse torrent from decoded bencoded data
   static TorrentModel _parseTorrent(
-      Map<String, dynamic> data, Uint8List? originalBytes) {
+      Map<String, dynamic> data, Uint8List? originalBytes,
+      {Uint8List? explicitInfoBytes}) {
     final infoRaw = data['info'];
     if (infoRaw is! Map) {
       throw FormatException(
@@ -187,31 +225,18 @@ class TorrentParser {
 
     // Calculate info hash
     Uint8List infoHashBuffer;
-    if (originalBytes != null) {
-      // Extract info dict bytes for hash calculation
-      infoDictBytes = _extractInfoDictBytes(originalBytes);
-      if (infoDictBytes != null) {
-        if (version == TorrentVersion.v2 || version == TorrentVersion.hybrid) {
-          // v2 uses SHA-256
-          final hash = sha256.convert(infoDictBytes);
-          infoHashBuffer = Uint8List.fromList(hash.bytes);
-        } else {
-          // v1 uses SHA-1
-          final hash = sha1.convert(infoDictBytes);
-          infoHashBuffer = Uint8List.fromList(hash.bytes);
-        }
-      } else {
-        // Fallback: use v1 hash if available
-        if (pieces != null && pieces.isNotEmpty) {
-          final hash = sha1.convert(infoDictBytes ?? Uint8List(0));
-          infoHashBuffer = Uint8List.fromList(hash.bytes);
-        } else {
-          throw FormatException('Unable to calculate info hash');
-        }
-      }
+    // Prefer explicitly supplied info-dict bytes (magnet metadata) so the
+    // hash is computed from the exact original bytes.
+    final effectiveInfoBytes = explicitInfoBytes ??
+        (originalBytes != null ? _extractInfoDictBytes(originalBytes) : null);
+    infoDictBytes = effectiveInfoBytes;
+    if (effectiveInfoBytes != null) {
+      final hash = (version == TorrentVersion.v2 ||
+              version == TorrentVersion.hybrid)
+          ? sha256.convert(effectiveInfoBytes)
+          : sha1.convert(effectiveInfoBytes);
+      infoHashBuffer = Uint8List.fromList(hash.bytes);
     } else {
-      // If we don't have original bytes, we can't calculate hash
-      // This shouldn't happen in normal usage
       throw FormatException(
           'Cannot calculate info hash without original bytes');
     }
@@ -460,73 +485,68 @@ class TorrentParser {
     return segments;
   }
 
-  /// Extract info dictionary bytes from bencoded torrent data
-  /// This is needed for calculating info hash
+  /// Extract the raw bytes of the `info` dictionary from bencoded torrent
+  /// data, for info-hash calculation.
+  ///
+  /// Uses a proper bencode walk (skipping over string payloads) instead of a
+  /// naive `d`/`e` byte scan, which produced wrong slices when string values
+  /// (e.g. `pieces`) contained `0x64`/`0x65` bytes.
   static Uint8List? _extractInfoDictBytes(Uint8List torrentBytes) {
     try {
-      // Find the start of "info" key
-      final infoKeyBytes = Uint8List.fromList('info'.codeUnits);
-      var infoStart = -1;
-
-      for (var i = 0; i < torrentBytes.length - infoKeyBytes.length; i++) {
-        var match = true;
-        for (var j = 0; j < infoKeyBytes.length; j++) {
-          if (torrentBytes[i + j] != infoKeyBytes[j]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) {
-          infoStart = i + infoKeyBytes.length;
-          break;
+      if (torrentBytes.isEmpty || torrentBytes[0] != 0x64) {
+        return null; // not a dictionary
+      }
+      var i = 1;
+      while (i < torrentBytes.length && torrentBytes[i] != 0x65) {
+        final keyStart = i;
+        i = _skipBencoded(torrentBytes, i);
+        final key = String.fromCharCodes(torrentBytes.sublist(keyStart, i));
+        final valueStart = i;
+        i = _skipBencoded(torrentBytes, i);
+        if (key == 'info') {
+          return torrentBytes.sublist(valueStart, i);
         }
       }
-
-      if (infoStart == -1) {
-        return null;
-      }
-
-      // Skip the key length and key itself, find the start of the value
-      // In bencode, dictionary entries are: d<key><value>e
-      // We need to find where the value starts after "info"
-      // The value is a dictionary, so it starts with 'd'
-
-      // Find the 'd' that starts the info dict
-      var dictStart = infoStart;
-      while (
-          dictStart < torrentBytes.length && torrentBytes[dictStart] != 0x64) {
-        dictStart++;
-      }
-
-      if (dictStart >= torrentBytes.length) {
-        return null;
-      }
-
-      // Find the matching 'e' that closes the info dict
-      var depth = 0;
-      var dictEnd = dictStart;
-      for (var i = dictStart; i < torrentBytes.length; i++) {
-        if (torrentBytes[i] == 0x64) {
-          // 'd' - start of dict
-          depth++;
-        } else if (torrentBytes[i] == 0x65) {
-          // 'e' - end of dict
-          depth--;
-          if (depth == 0) {
-            dictEnd = i + 1;
-            break;
-          }
-        }
-      }
-
-      if (dictEnd <= dictStart) {
-        return null;
-      }
-
-      return torrentBytes.sublist(dictStart, dictEnd);
+      return null;
     } catch (e) {
       _log.warning('Failed to extract info dict bytes', e);
       return null;
     }
+  }
+
+  /// Returns the index just past the bencoded value starting at [i].
+  static int _skipBencoded(Uint8List b, int i) {
+    final c = b[i];
+    if (c == 0x64) {
+      // dictionary
+      i++;
+      while (b[i] != 0x65) {
+        i = _skipBencoded(b, i); // key
+        i = _skipBencoded(b, i); // value
+      }
+      return i + 1;
+    }
+    if (c == 0x6c) {
+      // list
+      i++;
+      while (b[i] != 0x65) {
+        i = _skipBencoded(b, i);
+      }
+      return i + 1;
+    }
+    if (c == 0x69) {
+      // integer
+      while (b[i] != 0x65) {
+        i++;
+      }
+      return i + 1;
+    }
+    // byte string: <length>:<bytes>
+    var j = i;
+    while (b[j] != 0x3a) {
+      j++;
+    }
+    final len = int.parse(String.fromCharCodes(b.sublist(i, j)));
+    return j + 1 + len;
   }
 }
