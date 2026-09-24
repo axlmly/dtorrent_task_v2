@@ -34,7 +34,10 @@ mixin ExtendedProcessor on EventsEmittable<PeerEvent> {
   }
 
   String? getExtendedEventNameById(int id) {
-    return _extendedEventMap[id] ?? _localExtended[id];
+    // Incoming extended messages carry the id that *we* advertised in our
+    // local handshake's `m` dict, so resolve against the local map first.
+    // (Outgoing messages use the peer's ids via getExtendedEventId/_rawMap.)
+    return _localExtended[id] ?? _extendedEventMap[id];
   }
 
   void processExtendMessage(int id, Uint8List message) {

@@ -107,6 +107,9 @@ class MetadataDownloader
   /// Queue of metadata pieces to download
   final Queue<int> _metaDataPieces = Queue();
 
+  /// Rotates the starting peer for metadata requests across retries.
+  int _requestRound = 0;
+
   /// List of completed piece indices
   final List<int> _completedPieces = [];
 
@@ -487,6 +490,7 @@ class MetadataDownloader
     _peersAddress.remove(peer.address);
     _incomingAddress.remove(peer.address.address);
     _activePeers.remove(peer);
+    _availablePeers.remove(peer);
   }
 
   void _processPeerHandshake(Peer source, String remotePeerId, Object? data) {
@@ -669,21 +673,29 @@ class MetadataDownloader
 
   void _requestMetaData([Peer? peer]) {
     if (!_running) return;
-    if (_metaDataPieces.isEmpty || _availablePeers.isEmpty) return;
+    if (_metaDataPieces.isEmpty) return;
+
+    // Only use peers that completed the extended handshake with a valid
+    // ut_metadata id. Disposed peers may linger in _availablePeers with a
+    // cleared handshake map, so filter them out here as well.
+    final candidates = _prioritizedAvailablePeers(peer).where((p) {
+      if (p.remotePeerId == null) return false;
+      return p.getExtendedEventId('ut_metadata') != null;
+    }).toList();
+    if (candidates.isEmpty) return;
 
     // Request blocks from multiple peers in parallel
     // Use up to min(available pieces, available peers) parallel requests
-    final availablePeersList = _prioritizedAvailablePeers(peer);
-    final maxParallelRequests =
-        _metaDataPieces.length < availablePeersList.length
-            ? _metaDataPieces.length
-            : availablePeersList.length;
+    final maxParallelRequests = _metaDataPieces.length < candidates.length
+        ? _metaDataPieces.length
+        : candidates.length;
 
-    for (var i = 0;
-        i < maxParallelRequests && _metaDataPieces.isNotEmpty;
-        i++) {
-      final targetPeer = availablePeersList[i % availablePeersList.length];
-      if (targetPeer.remotePeerId == null) continue;
+    // Rotate the starting peer across retries so one dead/slow peer cannot
+    // block the whole metadata download.
+    final offset = _requestRound++ % candidates.length;
+
+    for (var i = 0; i < maxParallelRequests && _metaDataPieces.isNotEmpty; i++) {
+      final targetPeer = candidates[(offset + i) % candidates.length];
 
       final piece = _metaDataPieces.removeFirst();
       final msg = createRequestMessage(piece);

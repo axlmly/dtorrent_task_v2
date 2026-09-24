@@ -1,5 +1,6 @@
 ## Unreleased
 
+- fix BEP 09 magnet metadata download: resolve incoming extended-message ids against the local `m` map instead of the peer's map, evict disposed peers from the metadata peer set, and rotate metadata piece requests across peers that actually advertise `ut_metadata` (previously a single dead/slow peer could block the whole metadata fetch forever)
 - skip unroutable DHT bootstrap addresses (`0.0.0.0`, `::`, broadcast) in standalone driver instead of sending `find_node` datagrams to them
 - drop dead UDP sockets in standalone DHT driver so the next bootstrap binds fresh ones instead of reusing closed socket references across retries
 - add `clearBootstrapNodes()` to standalone DHT driver, facade, and adapter so callers can replace the built-in router list when one of its hosts goes away
