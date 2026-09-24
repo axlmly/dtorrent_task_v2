@@ -68,19 +68,20 @@ class UDPTracker extends Tracker with UDPTrackerBase {
           'Missing or invalid peerId for UDP announce (must be 20 chars)');
     }
     list.addAll(utf8.encode(peerId));
-    list.addAll(num2Uint64List(options['downloaded']));
-    list.addAll(num2Uint64List(options['left']));
-    list.addAll(num2Uint64List(options['uploaded']));
+    list.addAll(num2Uint64List(_asInt(options['downloaded'])));
+    list.addAll(num2Uint64List(_asInt(options['left'])));
+    list.addAll(num2Uint64List(_asInt(options['uploaded'])));
     var event = eventsByType[currentEvent];
     event ??= 0;
     list.addAll(num2Uint32List(event)); // This is the event type.
     list.addAll(
         num2Uint32List(_announceIpv4FromOption(options['ip']))); // default is 0
     list.addAll(
-        num2Uint32List(options['key'] ?? 0)); // de-facto compatibility field
-    list.addAll(num2Uint32List(options['numwant'] ??
-        0xFFFFFFFF)); // default value of -1 in the wire format.
-    list.addAll(num2Uint16List(options['port'])); // This is the TCP port.
+        num2Uint32List(_asInt(options['key']))); // de-facto compatibility field
+    list.addAll(num2Uint32List(_asInt(
+        options['numwant'],
+        fallback: 0xFFFFFFFF))); // default value of -1 in the wire format.
+    list.addAll(num2Uint16List(_asInt(options['port']))); // This is the TCP port.
 
     // BEP 41: append URLData options so UDP trackers can route by original
     // announce path/query (for example passkeys and custom endpoints).
@@ -155,6 +156,12 @@ class UDPTracker extends Tracker with UDPTrackerBase {
   @override
   void handleSocketError(Object e) {
     dispose(e);
+  }
+
+  int _asInt(Object? value, {int fallback = 0}) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? fallback;
+    return fallback;
   }
 
   int _announceIpv4FromOption(Object? ipOption) {

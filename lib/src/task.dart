@@ -1976,12 +1976,12 @@ class _TorrentTask
     final left = totalSize - downloaded;
     final map = {
       'downloaded': downloaded,
-      'uploaded': _stateUploaded,
+      'uploaded': _stateUploaded ?? 0,
       'left': left < 0 ? 0 : left,
       'numwant': 50,
       'compact': 1,
       'peerId': _peerId,
-      'port': _serverSocket?.port
+      'port': _serverSocket?.port ?? 0,
     };
     return Future.value(map);
   }
