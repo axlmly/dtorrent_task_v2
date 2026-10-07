@@ -34,7 +34,9 @@ class BasePieceSelector implements PieceSelector {
     // Prioritize downloading Suggest Pieces.
     if (suggestPieces != null && suggestPieces.isNotEmpty) {
       for (var i = 0; i < suggestPieces.length; i++) {
-        var p = provider[suggestPieces.elementAt(i)];
+        final pieceIndex = suggestPieces.elementAt(i);
+        if (_skippedPieces.contains(pieceIndex)) continue;
+        var p = provider[pieceIndex];
         if (p != null && !p.isCompleted && p.haveAvailableSubPiece()) {
           return p;
         }

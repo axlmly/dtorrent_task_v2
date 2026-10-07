@@ -179,6 +179,7 @@ class AdvancedSequentialPieceSelector implements PieceSelector {
     // Try suggested pieces first (Fast Extension - BEP 0006)
     if (suggestPieces != null && suggestPieces.isNotEmpty) {
       for (var pieceIndex in suggestPieces) {
+        if (_skippedPieces.contains(pieceIndex)) continue;
         final piece = provider[pieceIndex];
         if (piece != null &&
             !piece.isCompleted &&
