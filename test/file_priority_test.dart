@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:dtorrent_task_v2/dtorrent_task_v2.dart';
-import 'package:dtorrent_task_v2/src/file/file_priority_manager.dart';
 import 'package:test/test.dart';
 
 void main() {
