@@ -727,6 +727,7 @@ class _TorrentTask
     _fileManager ??= await DownloadFileManager.createFileManager(
         model, savePath, _stateFile!, _pieceManager!.pieces.values.toList());
     _peersManager ??= PeersManager(_peerId, model, ipFilter: _ipFilter);
+    _peersManager?.setProxyManager(_proxyManager);
     _peersManager?.setSSLConfig(_sslConfig);
     _peersManager?.setProtocolEncryptionConfig(_encryptionConfig);
     _advancedSelector?.setLocalPeerEndpoint(
@@ -1282,11 +1283,20 @@ class _TorrentTask
     // Get pieces by priority
     final piecesByPriority = _filePriorityManager!.getPiecesByPriority();
 
-    // Set priority pieces: high priority first, then normal, then low
+    // Prefer the highest non-empty priority tier. The selector falls back to
+    // other downloadable pieces when a peer does not have that tier.
     final priorityPieces = <int>{};
-    priorityPieces.addAll(piecesByPriority[FilePriority.high]!);
-    priorityPieces.addAll(piecesByPriority[FilePriority.normal]!);
-    priorityPieces.addAll(piecesByPriority[FilePriority.low]!);
+    for (final priority in [
+      FilePriority.high,
+      FilePriority.normal,
+      FilePriority.low,
+    ]) {
+      final pieces = piecesByPriority[priority]!;
+      if (pieces.isNotEmpty) {
+        priorityPieces.addAll(pieces);
+        break;
+      }
+    }
 
     // Update piece selector
     _pieceManager!.pieceSelector.setPriorityPieces(priorityPieces);
@@ -1303,6 +1313,7 @@ class _TorrentTask
 
   @override
   Future<Map> start() async {
+    if (state == TaskState.running) return const <String, dynamic>{};
     state = TaskState.running;
     // Incoming peer:
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
@@ -1655,8 +1666,11 @@ class _TorrentTask
     if (_fileManager == null || _pieceManager == null) return;
     if (bitfieldEvent.bitfield != null) {
       if (_fileManager!.isAllComplete && bitfieldEvent.peer.isSeeder) {
-        bitfieldEvent.peer.dispose(BadException(
-            "Do not connect to Seeder if the download is already completed"));
+        _peersManager?.disconnectPeer(
+          bitfieldEvent.peer,
+          BadException(
+              "Do not connect to Seeder if the download is already completed"),
+        );
         return;
       }
 

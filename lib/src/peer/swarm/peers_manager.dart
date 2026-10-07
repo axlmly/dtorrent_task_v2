@@ -53,6 +53,9 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
 
   final Set<Peer> _activePeers = {};
 
+  /// Peers that were intentionally disconnected and must not be reconnected.
+  final Set<Peer> _noReconnectPeers = {};
+
   final Map<Peer, EventsListener<PeerEvent>> _peerListeners = {};
 
   final Set<CompactAddress> _peersAddress = {};
@@ -425,10 +428,7 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
 
   void _processPeerDispose(PeerDisposeEvent disposeEvent) {
     _peerListeners.remove(disposeEvent.peer);
-    var reconnect = true;
-    if (disposeEvent.reason is BadException) {
-      reconnect = false;
-    }
+    final noReconnect = _noReconnectPeers.remove(disposeEvent.peer);
 
     _peersAddress.remove(disposeEvent.peer.address);
     _incomingAddress.remove(disposeEvent.peer.address.address);
@@ -443,20 +443,22 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
       return;
     }
 
-    if (reconnect) {
-      if (_activePeers.length < maxActivePeers && !isDisposed) {
-        addNewPeerAddress(
-          disposeEvent.peer.address,
-          disposeEvent.peer.source,
-          type: disposeEvent.peer.type,
-        );
-      }
-    } else {
-      if (disposeEvent.peer.isSeeder && !isDisposed) {
-        addNewPeerAddress(disposeEvent.peer.address, disposeEvent.peer.source,
-            type: disposeEvent.peer.type);
-      }
+    if (!noReconnect &&
+        !_paused &&
+        !isDisposed &&
+        _activePeers.length < maxActivePeers) {
+      addNewPeerAddress(
+        disposeEvent.peer.address,
+        disposeEvent.peer.source,
+        type: disposeEvent.peer.type,
+      );
     }
+  }
+
+  /// Disconnect a peer without scheduling a replacement connection.
+  Future<void> disconnectPeer(Peer peer, [Object? reason]) async {
+    _noReconnectPeers.add(peer);
+    await peer.dispose(reason);
   }
 
   void _peerConnected(PeerConnected event) {
@@ -573,7 +575,7 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
   Future<void> disposeAllSeeder([Object? reason]) async {
     for (var peer in [..._activePeers]) {
       if (peer.isSeeder) {
-        await peer.dispose(reason);
+        await disconnectPeer(peer, reason);
       }
     }
   }
@@ -589,6 +591,7 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
     _remoteRequest.clear();
     _pausedRequest.clear();
     _pausedRemoteRequest.clear();
+    _noReconnectPeers.clear();
     await _disposePeers(_activePeers);
   }
 

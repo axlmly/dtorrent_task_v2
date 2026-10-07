@@ -86,7 +86,13 @@ class FilePriorityManager {
 
   /// Get pieces that should be skipped (from files with skip priority)
   Set<int> getSkippedPieces() {
-    return getPiecesForPriority(FilePriority.skip);
+    if (_metainfo.pieces == null) return {};
+    return {
+      for (var pieceIndex = 0;
+          pieceIndex < _metainfo.pieces!.length;
+          pieceIndex++)
+        if (isPieceSkipped(pieceIndex)) pieceIndex,
+    };
   }
 
   /// Get pieces for high priority files
@@ -108,25 +114,11 @@ class FilePriorityManager {
       FilePriority.high: {},
     };
 
-    for (var i = 0; i < _metainfo.files.length; i++) {
-      final priority = getPriority(i);
-      final file = _metainfo.files[i];
-      final startPiece = file.offset ~/ _pieceLength;
-      var endPiece = file.end ~/ _pieceLength;
-
-      if (file.end.remainder(_pieceLength) == 0) {
-        endPiece--;
-      }
-
-      if (_metainfo.pieces != null) {
-        for (var pieceIndex = startPiece;
-            pieceIndex <= endPiece;
-            pieceIndex++) {
-          if (pieceIndex >= 0 && pieceIndex < _metainfo.pieces!.length) {
-            result[priority]!.add(pieceIndex);
-          }
-        }
-      }
+    if (_metainfo.pieces == null) return result;
+    for (var pieceIndex = 0;
+        pieceIndex < _metainfo.pieces!.length;
+        pieceIndex++) {
+      result[getPiecePriority(pieceIndex)]!.add(pieceIndex);
     }
 
     return result;
@@ -135,6 +127,7 @@ class FilePriorityManager {
   /// Check if a piece should be skipped
   bool isPieceSkipped(int pieceIndex) {
     // Find which file(s) this piece belongs to
+    var overlapsFile = false;
     for (var i = 0; i < _metainfo.files.length; i++) {
       final file = _metainfo.files[i];
       final startPiece = file.offset ~/ _pieceLength;
@@ -145,13 +138,12 @@ class FilePriorityManager {
       }
 
       if (pieceIndex >= startPiece && pieceIndex <= endPiece) {
+        overlapsFile = true;
         final priority = getPriority(i);
-        if (priority == FilePriority.skip) {
-          return true;
-        }
+        if (priority != FilePriority.skip) return false;
       }
     }
-    return false;
+    return overlapsFile;
   }
 
   /// Get priority for a piece (highest priority of files containing this piece)

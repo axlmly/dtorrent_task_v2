@@ -141,6 +141,16 @@ class MetadataDownloader
   /// Maximum number of retry attempts for metadata download
   static const int _maxRetryAttempts = 3;
 
+  /// Optional deadline for metadata discovery and transfer.
+  ///
+  /// A null value keeps retrying until the caller stops the downloader.
+  final Duration? overallTimeout;
+
+  /// Time to wait for one metadata block before retrying it.
+  final Duration requestTimeout;
+
+  Timer? _overallTimeoutTimer;
+
   /// Current retry attempt count
   int _retryAttempt = 0;
 
@@ -194,7 +204,10 @@ class MetadataDownloader
 
   /// Creates a new metadata downloader for the given info hash
   MetadataDownloader(this._infoHashString,
-      {List<Uri>? trackers, List<TrackerTier>? trackerTiers}) {
+      {List<Uri>? trackers,
+      List<TrackerTier>? trackerTiers,
+      this.overallTimeout,
+      this.requestTimeout = const Duration(seconds: 60)}) {
     _localPeerId = generatePeerId();
     List<int>? parsedHash;
     try {
@@ -233,7 +246,9 @@ class MetadataDownloader
   /// var downloader = MetadataDownloader.fromMagnet('magnet:?xt=urn:btih:...');
   /// await downloader.startDownload();
   /// ```
-  factory MetadataDownloader.fromMagnet(String magnetUri) {
+  factory MetadataDownloader.fromMagnet(String magnetUri,
+      {Duration? overallTimeout,
+      Duration requestTimeout = const Duration(seconds: 60)}) {
     final magnet = MagnetParser.parse(magnetUri);
     if (magnet == null) {
       throw ArgumentError('Invalid magnet URI: $magnetUri');
@@ -242,6 +257,8 @@ class MetadataDownloader
       magnet.infoHashString,
       trackers: magnet.trackers,
       trackerTiers: magnet.trackerTiers,
+      overallTimeout: overallTimeout,
+      requestTimeout: requestTimeout,
     );
   }
   Future<void> _init() async {
@@ -272,6 +289,16 @@ class MetadataDownloader
     }
 
     _running = true;
+    _overallTimeoutTimer?.cancel();
+    final overallTimeout = this.overallTimeout;
+    if (overallTimeout != null) {
+      _overallTimeoutTimer = Timer(overallTimeout, () {
+        if (!_running) return;
+        events.emit(MetaDataDownloadFailed(
+            'Metadata download timed out after ${overallTimeout.inSeconds}s'));
+        unawaited(stop());
+      });
+    }
 
     // Initialize tracker client if we have trackers from magnet link
     if (_magnetTrackers.isNotEmpty) {
@@ -343,6 +370,8 @@ class MetadataDownloader
 
   Future<void> stop() async {
     _running = false;
+    _overallTimeoutTimer?.cancel();
+    _overallTimeoutTimer = null;
     _dhtListener?.dispose();
     _dhtListener = null;
     _dhtRetryEvents = 0;
@@ -694,7 +723,9 @@ class MetadataDownloader
     // block the whole metadata download.
     final offset = _requestRound++ % candidates.length;
 
-    for (var i = 0; i < maxParallelRequests && _metaDataPieces.isNotEmpty; i++) {
+    for (var i = 0;
+        i < maxParallelRequests && _metaDataPieces.isNotEmpty;
+        i++) {
       final targetPeer = candidates[(offset + i) % candidates.length];
 
       final piece = _metaDataPieces.removeFirst();
@@ -703,13 +734,8 @@ class MetadataDownloader
       // Create timeout key with both peer ID and piece index
       final timeoutKey = '${targetPeer.remotePeerId}_$piece';
 
-      // Exponential backoff: base timeout 10s, +5s per retry (max 30s)
       final retryCount = _pieceRetryCount[piece] ?? 0;
-      final timeoutSeconds = 10 + (retryCount * 5);
-      final timeoutDuration =
-          Duration(seconds: timeoutSeconds > 30 ? 30 : timeoutSeconds);
-
-      final timer = Timer(timeoutDuration, () {
+      final timer = Timer(requestTimeout, () {
         if (!_running) {
           _requestTimeout.remove(timeoutKey);
           return;

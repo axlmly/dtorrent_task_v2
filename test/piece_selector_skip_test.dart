@@ -64,6 +64,15 @@ void main() {
     expect(selected!.index, isNot(0));
   });
 
+  test('base selector prefers configured priority pieces', () {
+    final selector = BasePieceSelector()..setPriorityPieces([4]);
+
+    final selected = selector.selectPiece(peer, pieces);
+
+    expect(selected, isNotNull);
+    expect(selected!.index, 4);
+  });
+
   test('advanced selector skips suggested pieces marked skip', () {
     final selector =
         AdvancedSequentialPieceSelector(SequentialConfig.forVideoStreaming())

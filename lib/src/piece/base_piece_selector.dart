@@ -36,6 +36,7 @@ class BasePieceSelector implements PieceSelector {
       for (var i = 0; i < suggestPieces.length; i++) {
         final pieceIndex = suggestPieces.elementAt(i);
         if (_skippedPieces.contains(pieceIndex)) continue;
+        if (!peer.remoteCompletePieces.contains(pieceIndex)) continue;
         var p = provider[pieceIndex];
         if (p != null && !p.isCompleted && p.haveAvailableSubPiece()) {
           return p;
@@ -60,6 +61,11 @@ class BasePieceSelector implements PieceSelector {
     if (availablePiece.isNotEmpty) {
       candidatePieces = availablePiece;
     }
+    final priorityCandidates =
+        candidatePieces.where(_priorityPieces.contains).toList(growable: false);
+    if (priorityCandidates.isNotEmpty) {
+      candidatePieces = priorityCandidates;
+    }
     // random = true;
     var maxList = <Piece>[];
     Piece? a;
@@ -83,6 +89,9 @@ class BasePieceSelector implements PieceSelector {
     if (startIndex == null) return null;
     maxList.add(a!);
     for (var i = startIndex; i < candidatePieces.length; i++) {
+      if (_skippedPieces.contains(candidatePieces[i])) {
+        continue;
+      }
       var p = provider[candidatePieces[i]];
       if (p == null ||
           !p.haveAvailableSubPiece() ||
