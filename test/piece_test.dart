@@ -28,5 +28,27 @@ void main() {
 
       expect(piece.validatePiece, throwsStateError);
     });
+
+    test('reset clears flushed state for a redownload', () {
+      final piece = Piece(
+        '00' * 20,
+        0,
+        32,
+        0,
+        requestLength: 16,
+        isComplete: true,
+      );
+
+      expect(piece.isCompletelyWritten, isTrue);
+      expect(piece.flushed, isTrue);
+
+      piece.reset();
+
+      expect(piece.isCompletelyWritten, isFalse);
+      expect(piece.flushed, isFalse);
+      expect(piece.availableSubPieceCount, 2);
+      piece.subPieceReceived(0, List<int>.filled(16, 1));
+      expect(piece.isCompletelyDownloaded, isFalse);
+    });
   });
 }

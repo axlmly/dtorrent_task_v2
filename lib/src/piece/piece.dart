@@ -255,6 +255,24 @@ class Piece {
     return true;
   }
 
+  /// Reset all persisted and in-memory state so this piece can be downloaded
+  /// again after its backing file was deleted.
+  ///
+  /// Returning individual sub-pieces to the queue is insufficient after a
+  /// flushed piece is deleted: [_flushed] prevents [init] from allocating a
+  /// new block, while the remaining on-disk markers make the piece appear
+  /// partially complete. Rebuild the queue and clear every completion marker
+  /// as one atomic state transition.
+  void reset() {
+    _block = null;
+    _flushed = false;
+    _inMemorySubPieces.clear();
+    _onDiskSubPieces.clear();
+    _subPiecesQueue = Queue.from(
+      List.generate(_subPiecesCount, (index) => index),
+    );
+  }
+
   /// Expected piece hash from piece layers (for v2)
   Uint8List? _expectedPieceHash;
 
