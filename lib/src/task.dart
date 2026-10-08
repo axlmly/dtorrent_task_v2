@@ -703,7 +703,10 @@ class _TorrentTask
   int _dhtErrorEvents = 0;
 
   Future<PeersManager> _init(TorrentModel model, String savePath) async {
-    _lsd ??= LSD(model.infoHash, _peerId);
+    final lsdInfoHash = _announceInfoHash
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    _lsd ??= LSD(lsdInfoHash, _peerId);
     _infoHashString ??= String.fromCharCodes(_announceInfoHash);
     _tracker ??= tracker.TorrentAnnounceTracker(this);
     _stateFile ??= await StateFileV2.getStateFile(savePath, model);
@@ -2137,7 +2140,7 @@ class _TorrentTask
 
   @override
   void startAnnounceUrl(Uri url, Uint8List infoHash) {
-    _tracker?.runTracker(url, infoHash);
+    _tracker?.runTracker(url, _announceInfoHash);
   }
 
   @override
