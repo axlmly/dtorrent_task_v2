@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -6,6 +7,8 @@ import 'package:dtorrent_task_v2/src/torrent/torrent_model.dart';
 import 'package:logging/logging.dart';
 
 import '../piece/piece.dart';
+import '../torrent/merkle_tree.dart';
+import '../torrent/torrent_version.dart';
 
 var _log = Logger('FileValidator');
 
@@ -33,17 +36,46 @@ class FileValidator {
   final TorrentModel metainfo;
   final List<Piece> pieces;
   final String savePath;
+  final Map<String, String> filePaths;
 
-  FileValidator(this.metainfo, this.pieces, this.savePath);
+  FileValidator(this.metainfo, this.pieces, this.savePath,
+      {this.filePaths = const {}});
 
   /// Validate all files in the torrent
-  Future<FileValidationResult> validateAll() async {
+  Future<FileValidationResult> validateAll({
+    List<int>? pieceIndices,
+    void Function(int checked, int total)? onProgress,
+  }) async {
+    final indices = pieceIndices ?? List.generate(pieces.length, (i) => i);
+    final snapshot = [
+      for (final piece in pieces)
+        Piece(piece.hashString, piece.index, piece.byteLength, piece.offset,
+            version: piece.version),
+    ];
+    final progress = ReceivePort();
+    final subscription = progress.listen((event) {
+      final counts = event as (int, int);
+      onProgress?.call(counts.$1, counts.$2);
+    });
+    try {
+      return await _validateInIsolate(metainfo, snapshot, savePath,
+          Map.of(filePaths), indices, progress.sendPort);
+    } finally {
+      await subscription.cancel();
+      progress.close();
+    }
+  }
+
+  Future<FileValidationResult> _validateAllDirect(
+      List<int> indices, SendPort progress) async {
     try {
       final invalidPieces = <int>[];
       var validatedBytes = 0;
       var totalBytes = 0;
 
-      for (var i = 0; i < pieces.length; i++) {
+      var checked = 0;
+      final clock = Stopwatch()..start();
+      for (final i in indices) {
         final piece = pieces[i];
         totalBytes += piece.byteLength;
 
@@ -52,7 +84,12 @@ class FileValidator {
           validatedBytes += piece.byteLength;
         } else {
           invalidPieces.add(i);
-          _log.warning('Piece $i failed validation');
+          _log.fine('Piece $i failed validation');
+        }
+        checked++;
+        if (clock.elapsedMilliseconds >= 200 || checked == indices.length) {
+          progress.send((checked, indices.length));
+          clock.reset();
         }
       }
 
@@ -79,11 +116,6 @@ class FileValidator {
       return false;
     }
 
-    final piece = pieces[pieceIndex];
-    if (!piece.isCompletelyWritten) {
-      return false;
-    }
-
     try {
       final piece = pieces[pieceIndex];
 
@@ -94,7 +126,9 @@ class FileValidator {
       }
 
       // Calculate hash
-      final hash = _calculatePieceHash(pieceData);
+      final hash = piece.version == TorrentVersion.v2
+          ? MerkleTreeHelper.calculatePieceRoot(pieceData)
+          : _calculatePieceHash(pieceData);
 
       // Compare with expected hash
       // The piece object already has hashString, so we'll use that
@@ -104,7 +138,7 @@ class FileValidator {
       final expectedHashBytes = _hexStringToBytes(expectedHashString);
       return _compareHashes(hash, expectedHashBytes);
     } catch (e) {
-      _log.warning('Error validating piece $pieceIndex', e);
+      _log.fine('Error validating piece $pieceIndex', e);
       return false;
     }
   }
@@ -125,7 +159,7 @@ class FileValidator {
           if (file.path == relativePath || file.path.endsWith(relativePath)) {
             final startPiece = file.offset ~/ metainfo.pieceLength;
             final endPiece =
-                (file.offset + file.length) ~/ metainfo.pieceLength;
+                (file.offset + file.length - 1) ~/ metainfo.pieceLength;
             for (var j = startPiece; j <= endPiece; j++) {
               piecesToValidate.add(j);
             }
@@ -198,17 +232,26 @@ class FileValidator {
         final fileObj = File(filePath);
         if (await fileObj.exists()) {
           final access = await fileObj.open(mode: FileMode.read);
-          await access.setPosition(readStart);
-          final bytes = await access.read(readLength);
-          data.setRange(offset, offset + bytes.length, bytes);
-          offset += bytes.length;
-          await access.close();
+          try {
+            await access.setPosition(readStart);
+            final bytes = await access.read(readLength);
+            if (bytes.length != readLength) {
+              throw FileSystemException('Short piece read', filePath);
+            }
+            data.setRange(offset, offset + bytes.length, bytes);
+            offset += bytes.length;
+          } finally {
+            await access.close();
+          }
         } else {
           throw FileSystemException('File not found', filePath);
         }
       }
     }
 
+    if (offset != piece.byteLength) {
+      throw const FileSystemException('Incomplete piece coverage');
+    }
     return data;
   }
 
@@ -267,6 +310,8 @@ class FileValidator {
   }
 
   String _resolveTorrentFilePath(String torrentPath) {
+    final movedPath = filePaths[torrentPath];
+    if (movedPath != null) return movedPath;
     final normalizedSavePath = savePath.endsWith(Platform.pathSeparator)
         ? savePath
         : '$savePath${Platform.pathSeparator}';
@@ -276,4 +321,16 @@ class FileValidator {
         .replaceFirst(RegExp(r'^[\\/]+'), '');
     return '$normalizedSavePath$relativePath';
   }
+}
+
+Future<FileValidationResult> _validateInIsolate(
+    TorrentModel model,
+    List<Piece> pieces,
+    String savePath,
+    Map<String, String> paths,
+    List<int> indices,
+    SendPort progress) {
+  return Isolate.run(() =>
+      FileValidator(model, pieces, savePath, filePaths: paths)
+          ._validateAllDirect(indices, progress));
 }

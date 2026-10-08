@@ -285,6 +285,14 @@ class Piece {
     );
   }
 
+  /// Restore a piece after its complete contents were verified on disk.
+  void restoreVerified() {
+    reset();
+    _onDiskSubPieces.addAll(_subPiecesQueue);
+    _subPiecesQueue.clear();
+    _flushed = true;
+  }
+
   /// Expected piece hash from piece layers (for v2)
   Uint8List? _expectedPieceHash;
 

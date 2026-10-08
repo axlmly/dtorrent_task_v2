@@ -1577,6 +1577,11 @@ class _TorrentTask
     }
     _flushIndicesBuffer.add(index);
     await _flushFiles(_flushIndicesBuffer);
+    if (_fileManager!.piece2fileMap?[index]?.any((file) => file.completed) ==
+        true) {
+      await _fileManager!.flushFiles({index});
+      await _fileManager!.saveResumeData();
+    }
     if (_fileManager!.isAllComplete) {
       events.emit(AllComplete());
       _whenTaskDownloadComplete();

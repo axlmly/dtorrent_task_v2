@@ -72,10 +72,8 @@ class StateRecovery {
       final bitfield = Bitfield.createEmptyBitfield(metainfo.pieces!.length);
       for (var i = 0; i < pieces.length; i++) {
         if (!validationResult.invalidPieces.contains(i)) {
-          // Check if piece is completely written
-          if (pieces[i].isCompletelyWritten) {
-            bitfield.setBit(i, true);
-          }
+          pieces[i].restoreVerified();
+          bitfield.setBit(i, true);
         }
       }
 
@@ -85,10 +83,9 @@ class StateRecovery {
 
       // Update bitfield with recovered data
       for (var i = 0; i < bitfield.piecesNum; i++) {
-        if (bitfield.getBit(i)) {
-          await stateFile.updateBitfield(i, true);
-        }
+        await stateFile.updateBitfield(i, bitfield.getBit(i));
       }
+      await stateFile.saveResumeData();
 
       _log.info('State file recovery completed successfully');
       return stateFile;

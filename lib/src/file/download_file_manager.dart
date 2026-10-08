@@ -60,40 +60,7 @@ class DownloadFileManager with EventsEmittable<DownloadFileManagerEvent> {
   Future<void> _validateOnResume(String directory) async {
     _log.info('Validating files on resume...');
     try {
-      final validator = FileValidator(metainfo, _pieces, directory);
-
-      // Quick validation first
-      final quickValid = await validator.quickValidate();
-      if (!quickValid) {
-        _log.warning(
-            'Quick validation failed - some files may be missing or corrupted');
-      }
-
-      // Validate pieces that are marked as complete
-      final completedPieces = _bitfield.completedPieces;
-      if (completedPieces.isNotEmpty) {
-        _log.info('Validating ${completedPieces.length} completed pieces...');
-        var invalidCount = 0;
-
-        for (var pieceIndex in completedPieces) {
-          if (pieceIndex < _pieces.length) {
-            final isValid = await validator.validatePiece(pieceIndex);
-            if (!isValid) {
-              _log.warning(
-                  'Piece $pieceIndex failed validation, marking for re-download');
-              await _updateStateBitfield(pieceIndex, false);
-              invalidCount++;
-            }
-          }
-        }
-
-        if (invalidCount > 0) {
-          _log.warning(
-              'Found $invalidCount invalid pieces, they will be re-downloaded');
-        } else {
-          _log.info('All completed pieces validated successfully');
-        }
-      }
+      await recheck();
     } catch (e, stackTrace) {
       _log.warning('File validation on resume failed', e, stackTrace);
       // Don't fail the resume if validation fails
@@ -138,6 +105,47 @@ class DownloadFileManager with EventsEmittable<DownloadFileManagerEvent> {
     if (stateFile is StateFileV2) {
       await stateFile.saveResumeData();
     }
+  }
+
+  /// Rebuild the resume bitfield from piece hashes. The caller should pause
+  /// the task first so files cannot change while they are being checked.
+  Future<FileValidationResult> recheck({
+    bool onlyMissing = false,
+    void Function(int checked, int total)? onProgress,
+  }) async {
+    final indices = [
+      for (var i = 0; i < _pieces.length; i++)
+        if (!onlyMissing || !_bitfield.getBit(i)) i,
+    ];
+    final validator = FileValidator(
+      metainfo,
+      _pieces,
+      _baseDirectory!,
+      filePaths: {
+        for (final file in _files) file.torrentFilePath: file.filePath,
+      },
+    );
+    final result = await validator.validateAll(
+      pieceIndices: indices,
+      onProgress: onProgress,
+    );
+    if (result.error != null) throw FileSystemException(result.error!);
+    final invalid = result.invalidPieces.toSet();
+    for (final index in indices) {
+      final valid = !invalid.contains(index);
+      if (valid) {
+        _pieces[index].restoreVerified();
+      } else {
+        _pieces[index].reset();
+      }
+      await _updateStateBitfield(index, valid);
+    }
+    for (final file in _files) {
+      file.recalculateDownloadedBytes();
+    }
+    await saveResumeData();
+    events.emit(StateFileUpdated());
+    return result;
   }
 
   // Future<bool> updateBitfields(List<int> indices, [List<bool> haves]) {
