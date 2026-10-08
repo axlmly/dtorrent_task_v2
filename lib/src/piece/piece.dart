@@ -274,8 +274,13 @@ class Piece {
 
     // For v2, use Merkle tree validation if piece hash is available
     if (version == TorrentVersion.v2 && _expectedPieceHash != null) {
-      final valid =
-          MerkleTreeHelper.validatePiece(_block!, _expectedPieceHash!);
+      final actual = MerkleTreeHelper.calculatePieceRoot(_block!);
+      final valid = actual.length == _expectedPieceHash!.length &&
+          List<int>.generate(
+                  actual.length,
+                  (index) =>
+                      actual[index] == _expectedPieceHash![index] ? 0 : 1)
+              .every((value) => value == 0);
       if (!valid) {
         for (var subPiece in {..._inMemorySubPieces}) {
           pushSubPieceBack(subPiece);

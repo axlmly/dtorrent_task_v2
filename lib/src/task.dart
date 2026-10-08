@@ -92,6 +92,9 @@ abstract class TorrentTask with EventsEmittable<TaskEvent> {
     bool partialSeedingEnabled = false,
     SSLConfig? sslConfig,
     ProtocolEncryptionConfig? encryptionConfig,
+    String? peerId,
+    String? peerIdPrefix,
+    int maxActivePeers = defaultMaxActivePeers,
   ]) {
     return _TorrentTask(
       metaInfo,
@@ -104,6 +107,9 @@ abstract class TorrentTask with EventsEmittable<TaskEvent> {
       partialSeedingEnabled: partialSeedingEnabled,
       sslConfig: sslConfig,
       encryptionConfig: encryptionConfig,
+      peerId: peerId,
+      peerIdPrefix: peerIdPrefix,
+      maxActivePeers: maxActivePeers,
     );
   }
   void startAnnounceUrl(Uri url, Uint8List infoHash);
@@ -111,6 +117,9 @@ abstract class TorrentTask with EventsEmittable<TaskEvent> {
 
   // The name of the torrent
   String get name => metaInfo.name;
+
+  /// The 20-byte peer ID announced to trackers and sent in handshakes.
+  String get peerId;
 
   StateFile? get stateFile;
 
@@ -543,6 +552,10 @@ class _TorrentTask
 
   final String _savePath;
 
+  final String? _configuredPeerId;
+  final String? _peerIdPrefix;
+  final int _maxActivePeers;
+
   final Set<String> _peerIds = {};
 
   late String
@@ -590,23 +603,51 @@ class _TorrentTask
       ProxyConfig? proxyConfig,
       bool partialSeedingEnabled = false,
       SSLConfig? sslConfig,
-      ProtocolEncryptionConfig? encryptionConfig})
+      ProtocolEncryptionConfig? encryptionConfig,
+      String? peerId,
+      String? peerIdPrefix,
+      int maxActivePeers = defaultMaxActivePeers})
       : _webSeeds = webSeeds ?? [],
         _acceptableSources = acceptableSources ?? [],
         _sequentialConfig = sequentialConfig,
-        _partialSeedingEnabled = partialSeedingEnabled {
+        _partialSeedingEnabled = partialSeedingEnabled,
+        _configuredPeerId = peerId == null ? null : normalizePeerId(peerId),
+        _peerIdPrefix = peerIdPrefix,
+        _maxActivePeers = maxActivePeers {
+    if (maxActivePeers <= 0) {
+      throw ArgumentError.value(
+          maxActivePeers, 'maxActivePeers', 'must be greater than zero');
+    }
+    if (peerId != null && peerIdPrefix != null) {
+      throw ArgumentError('peerId and peerIdPrefix cannot both be set');
+    }
+    if (peerIdPrefix != null &&
+        (peerIdPrefix.length != 8 ||
+            peerIdPrefix.codeUnits.any((byte) => byte > 255))) {
+      throw ArgumentError.value(
+        peerIdPrefix,
+        'peerIdPrefix',
+        'must contain exactly 8 single-byte characters',
+      );
+    }
     _sslConfig = sslConfig;
     _encryptionConfig = encryptionConfig;
     if (proxyConfig != null) {
       _proxyManager = ProxyManager(proxyConfig);
     }
-    _peerId = generatePeerId();
+    _peerId = _configuredPeerId ??
+        (_peerIdPrefix == null
+            ? generatePeerId()
+            : generatePeerId(_peerIdPrefix!));
     // Initialize progress debouncer with 300ms delay
     _progressDebouncer = Debouncer<StateFileUpdated>(
       const Duration(milliseconds: 300),
       (event) => events.emit(event),
     );
   }
+
+  @override
+  String get peerId => _peerId;
 
   @override
   double get averageDownloadSpeed {
@@ -646,6 +687,16 @@ class _TorrentTask
 
   String? _infoHashString;
 
+  Uint8List get _announceInfoHash {
+    final version = TorrentVersionHelper.detectVersion(_metaInfo);
+    if (version == TorrentVersion.v2) {
+      return Uint8List.fromList(_metaInfo.truncatedInfoHash);
+    }
+    return Uint8List.fromList(
+      _metaInfo.v1InfoHash ?? _metaInfo.infoHashBuffer,
+    );
+  }
+
   Timer? _dhtRepeatTimer;
 
   int _dhtRetryEvents = 0;
@@ -653,7 +704,7 @@ class _TorrentTask
 
   Future<PeersManager> _init(TorrentModel model, String savePath) async {
     _lsd ??= LSD(model.infoHash, _peerId);
-    _infoHashString ??= String.fromCharCodes(model.infoHashBuffer);
+    _infoHashString ??= String.fromCharCodes(_announceInfoHash);
     _tracker ??= tracker.TorrentAnnounceTracker(this);
     _stateFile ??= await StateFileV2.getStateFile(savePath, model);
 
@@ -726,7 +777,12 @@ class _TorrentTask
 
     _fileManager ??= await DownloadFileManager.createFileManager(
         model, savePath, _stateFile!, _pieceManager!.pieces.values.toList());
-    _peersManager ??= PeersManager(_peerId, model, ipFilter: _ipFilter);
+    _peersManager ??= PeersManager(
+      _peerId,
+      model,
+      ipFilter: _ipFilter,
+      maxActivePeers: _maxActivePeers,
+    );
     _peersManager?.setProxyManager(_proxyManager);
     _peersManager?.setSSLConfig(_sslConfig);
     _peersManager?.setProtocolEncryptionConfig(_encryptionConfig);
@@ -959,6 +1015,10 @@ class _TorrentTask
   void _applyScheduledSpeedLimits({int? maxDownloadRate, int? maxUploadRate}) {
     _scheduledMaxDownloadRate = maxDownloadRate;
     _scheduledMaxUploadRate = maxUploadRate;
+    _peersManager?.setSpeedLimits(
+      maxDownloadRate: maxDownloadRate,
+      maxUploadRate: maxUploadRate,
+    );
     _log.info(
       'Scheduler speed caps updated: '
       'download=${maxDownloadRate ?? 'unlimited'} B/s, '
@@ -1371,8 +1431,13 @@ class _TorrentTask
         // Use debouncer to reduce UI update frequency
         _progressDebouncer?.call(StateFileUpdated());
       })
-      ..on<SubPieceReadCompleted>((event) => _peersManager
-          ?.readSubPieceComplete(event.pieceIndex, event.begin, event.block));
+      ..on<SubPieceReadCompleted>((event) {
+        final manager = _peersManager;
+        if (manager != null) {
+          unawaited(manager.readSubPieceComplete(
+              event.pieceIndex, event.begin, event.block));
+        }
+      });
     pieceManagerListener
       ?..on<PieceAccepted>((event) => processPieceAccepted(event.pieceIndex))
       ..on<PieceRejected>((event) => null);
@@ -1399,7 +1464,7 @@ class _TorrentTask
       final dhtPort = await _dht?.bootstrap();
       if (dhtPort != null) {
         _dht?.announce(
-          String.fromCharCodes(_metaInfo.infoHashBuffer),
+          String.fromCharCodes(_announceInfoHash),
           _serverSocket!.port,
         );
       } else {
@@ -1414,7 +1479,7 @@ class _TorrentTask
     } else if (_partialSeedingEnabled && isPartialSeed) {
       await announcePausedToTrackers(_metaInfo.announces);
     } else {
-      _tracker?.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
+      _tracker?.runTrackers(_metaInfo.announces, _announceInfoHash,
           event: tracker.eventStarted);
     }
     events.emit(TaskStarted());
@@ -1871,6 +1936,11 @@ class _TorrentTask
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
     }
+    await _peersManager!.acquireDownload(size);
+    if (state == TaskState.paused || peer.isDisposed) {
+      piece.pushSubPiece(subIndex);
+      return;
+    }
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
     } else {
@@ -2072,7 +2142,7 @@ class _TorrentTask
 
   @override
   void requestPeersFromDHT() {
-    _dht?.requestPeers(String.fromCharCodes(_metaInfo.infoHashBuffer));
+    _dht?.requestPeers(String.fromCharCodes(_announceInfoHash));
   }
 
   @override
@@ -2183,7 +2253,7 @@ class _TorrentTask
       proxyManager: _proxyManager,
       sslConfig: _sslConfig,
     );
-    final infoHash = Uint8List.fromList(_metaInfo.infoHashBuffer);
+    final infoHash = _announceInfoHash;
 
     for (final trackerUrl in announceList) {
       final options = await getOptions(trackerUrl, _metaInfo.infoHash);
@@ -2244,9 +2314,12 @@ class _TorrentTask
     }
 
     // Perform scrape with torrent's info hash
-    final infoHash = Uint8List.fromList(_metaInfo.infoHashBuffer);
+    final infoHash = _announceInfoHash;
     final result = await _scrapeClient!.scrape(url, [infoHash]);
-    final infoHashHex = _metaInfo.infoHash.toLowerCase();
+    final infoHashHex = infoHash
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toLowerCase();
     final stats = result.getStatsForInfoHash(infoHashHex);
     if (stats?.downloaders != null) {
       _trackerDownloaders = stats!.downloaders;

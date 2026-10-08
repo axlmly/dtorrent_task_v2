@@ -20,8 +20,10 @@ import '../../filter/ip_filter.dart';
 import '../../proxy/proxy_manager.dart';
 import '../../ssl/ssl_config.dart';
 import '../../encryption/protocol_encryption.dart';
+import '../../schedule/byte_rate_limiter.dart';
 
-const maxActivePeers = 50;
+const defaultMaxActivePeers = 50;
+const maxActivePeers = defaultMaxActivePeers;
 
 const maxPeerWriteBufferSize = 10 * 1024 * 1024;
 
@@ -72,6 +74,12 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
 
   final TorrentModel _metaInfo;
 
+  /// Maximum number of connected peers retained for this task.
+  final int maxActivePeers;
+
+  final ByteRateLimiter _downloadLimiter = ByteRateLimiter();
+  final ByteRateLimiter _uploadLimiter = ByteRateLimiter();
+
   int _uploaded = 0;
 
   int _downloaded = 0;
@@ -100,7 +108,9 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
     this._localPeerId,
     this._metaInfo, {
     IPFilter? ipFilter,
-  }) {
+    int maxActivePeers = defaultMaxActivePeers,
+  })  : assert(maxActivePeers > 0),
+        maxActivePeers = maxActivePeers {
     _ipFilter = ipFilter;
     _init();
     // Start pex interval
@@ -133,6 +143,17 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
 
   /// Get current proxy manager
   ProxyManager? get proxyManager => _proxyManager;
+
+  int? get maxDownloadRate => _downloadLimiter.bytesPerSecond;
+
+  int? get maxUploadRate => _uploadLimiter.bytesPerSecond;
+
+  void setSpeedLimits({int? maxDownloadRate, int? maxUploadRate}) {
+    _downloadLimiter.bytesPerSecond = maxDownloadRate;
+    _uploadLimiter.bytesPerSecond = maxUploadRate;
+  }
+
+  Future<void> acquireDownload(int bytes) => _downloadLimiter.acquire(bytes);
 
   /// Set SSL config for peer connections
   void setSSLConfig(SSLConfig? config) {
@@ -406,13 +427,15 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
   ///
   /// [pieceIndex] is the index of the piece, [begin] is the byte index of the whole
   /// contents , [block] should be uint8 list, it's the sub-piece contents bytes.
-  void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
+  Future<void> readSubPieceComplete(
+      int pieceIndex, int begin, List<int> block) async {
     final requestIndex = _remoteRequest.indexWhere(
       (request) => request.pieceIndex == pieceIndex && request.begin == begin,
     );
     if (requestIndex >= 0) {
       final request = _remoteRequest.removeAt(requestIndex);
       final peer = request.peer;
+      await _uploadLimiter.acquire(block.length);
       if (!peer.isDisposed && peer.sendPiece(pieceIndex, begin, block)) {
         _uploaded += block.length;
         _uploadedNotifySize += block.length;
@@ -462,6 +485,13 @@ class PeersManager with Holepunch, PEX, EventsEmittable<PeerEvent> {
   }
 
   void _peerConnected(PeerConnected event) {
+    if (_activePeers.length >= maxActivePeers) {
+      unawaited(disconnectPeer(
+        event.peer,
+        StateError('maximum active peer limit reached'),
+      ));
+      return;
+    }
     _startedTime ??= DateTime.now().millisecondsSinceEpoch;
     _endTime = null;
     _activePeers.add(event.peer);

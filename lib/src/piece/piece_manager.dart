@@ -60,8 +60,7 @@ class PieceManager
       PieceSelector pieceSelector, TorrentModel metaInfo, Bitfield bitfield,
       {TorrentVersion? version}) {
     if (metaInfo.pieces == null) {
-      throw ArgumentError(
-          'Cannot create PieceManager: torrent has no pieces (v2-only torrent?)');
+      throw ArgumentError('Torrent metadata does not contain piece hashes');
     }
     var p = PieceManager(pieceSelector, metaInfo.pieces!.length);
     p.initPieces(metaInfo, bitfield, version: version);
@@ -71,8 +70,7 @@ class PieceManager
   void initPieces(TorrentModel metaInfo, Bitfield bitfield,
       {TorrentVersion? version}) {
     if (metaInfo.pieces == null) {
-      throw ArgumentError(
-          'Cannot init pieces: torrent has no pieces (v2-only torrent?)');
+      throw ArgumentError('Torrent metadata does not contain piece hashes');
     }
     var detectedVersion =
         version ?? TorrentVersionHelper.detectVersion(metaInfo);
@@ -96,15 +94,18 @@ class PieceManager
         bitfield.setBit(i, true);
       }
 
-      if (bitfield.getBit(i)) {
-        var piece = Piece(hashString, i, byteLength, startbyte,
-            isComplete: true, version: detectedVersion);
-        _pieces[i] = piece;
-      } else {
-        var piece = Piece(hashString, i, byteLength, startbyte,
-            version: detectedVersion);
-        _pieces[i] = piece;
+      final piece = Piece(
+        hashString,
+        i,
+        byteLength,
+        startbyte,
+        isComplete: bitfield.getBit(i),
+        version: detectedVersion,
+      );
+      if (detectedVersion == TorrentVersion.v2 && pieceHash.length == 32) {
+        piece.setExpectedPieceHash(pieceHash);
       }
+      _pieces[i] = piece;
 
       startbyte = startbyte + byteLength;
     }

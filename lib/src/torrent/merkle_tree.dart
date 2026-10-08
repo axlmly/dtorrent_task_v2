@@ -39,6 +39,21 @@ class MerkleTreeHelper {
     return _buildTree(leafHashes);
   }
 
+  /// Calculate a v2 piece root. The final 16 KiB block is zero-padded before
+  /// hashing, as required by BEP 52.
+  static Uint8List calculatePieceRoot(Uint8List pieceData,
+      {int blockSize = 16 * 1024}) {
+    if (pieceData.isEmpty) return Uint8List(32);
+    final leafHashes = <Uint8List>[];
+    for (var offset = 0; offset < pieceData.length; offset += blockSize) {
+      final block = Uint8List(blockSize);
+      final end = (offset + blockSize).clamp(0, pieceData.length);
+      block.setRange(0, end - offset, pieceData, offset);
+      leafHashes.add(Uint8List.fromList(sha256.convert(block).bytes));
+    }
+    return _buildTree(leafHashes);
+  }
+
   /// Build Merkle tree from leaf hashes
   static Uint8List _buildTree(List<Uint8List> hashes) {
     if (hashes.isEmpty) {

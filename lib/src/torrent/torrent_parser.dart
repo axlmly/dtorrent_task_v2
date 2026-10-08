@@ -220,6 +220,13 @@ class TorrentParser {
             return file;
           }).toList();
         }
+        if (version == TorrentVersion.v2) {
+          pieces = _buildV2PieceHashes(
+            treeFiles,
+            pieceLength,
+            pieceLayers ?? const <String, Uint8List>{},
+          );
+        }
       }
     }
 
@@ -231,8 +238,7 @@ class TorrentParser {
         (originalBytes != null ? _extractInfoDictBytes(originalBytes) : null);
     infoDictBytes = effectiveInfoBytes;
     if (effectiveInfoBytes != null) {
-      final hash = (version == TorrentVersion.v2 ||
-              version == TorrentVersion.hybrid)
+      final hash = version == TorrentVersion.v2
           ? sha256.convert(effectiveInfoBytes)
           : sha1.convert(effectiveInfoBytes);
       infoHashBuffer = Uint8List.fromList(hash.bytes);
@@ -439,6 +445,42 @@ class TorrentParser {
     return pieces;
   }
 
+  static List<Uint8List> _buildV2PieceHashes(
+    List<FileTreeFile> files,
+    int pieceLength,
+    Map<String, Uint8List> pieceLayers,
+  ) {
+    final result = <Uint8List>[];
+    for (final file in files) {
+      if (file.length <= 0) continue;
+      final pieceCount = (file.length + pieceLength - 1) ~/ pieceLength;
+      final root = file.piecesRoot;
+      if (root == null || root.length != 32) {
+        throw FormatException(
+            'v2 file ${file.path} is missing a valid pieces root');
+      }
+      final layer = pieceLayers[_bytesToHex(root)];
+      if (layer == null) {
+        if (pieceCount != 1) {
+          throw FormatException(
+              'v2 file ${file.path} is missing its piece layer');
+        }
+        result.add(Uint8List.fromList(root));
+        continue;
+      }
+      if (layer.length < pieceCount * 32 || layer.length % 32 != 0) {
+        throw FormatException('invalid piece layer for v2 file ${file.path}');
+      }
+      for (var index = 0; index < pieceCount; index++) {
+        result.add(layer.sublist(index * 32, index * 32 + 32));
+      }
+    }
+    return result;
+  }
+
+  static String _bytesToHex(Iterable<int> bytes) =>
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+
   /// Parse piece layers from bencoded data
   static Map<String, Uint8List> _parsePieceLayers(
       Map<dynamic, dynamic> layersData) {
@@ -499,8 +541,22 @@ class TorrentParser {
       var i = 1;
       while (i < torrentBytes.length && torrentBytes[i] != 0x65) {
         final keyStart = i;
-        i = _skipBencoded(torrentBytes, i);
-        final key = String.fromCharCodes(torrentBytes.sublist(keyStart, i));
+        final keyEnd = _skipBencoded(torrentBytes, i);
+        if (torrentBytes[keyStart] < 0x30 || torrentBytes[keyStart] > 0x39) {
+          return null;
+        }
+        var colon = keyStart;
+        while (colon < keyEnd && torrentBytes[colon] != 0x3a) {
+          colon++;
+        }
+        if (colon >= keyEnd) return null;
+        final keyLength = int.parse(
+          String.fromCharCodes(torrentBytes.sublist(keyStart, colon)),
+        );
+        final key = String.fromCharCodes(
+          torrentBytes.sublist(colon + 1, colon + 1 + keyLength),
+        );
+        i = keyEnd;
         final valueStart = i;
         i = _skipBencoded(torrentBytes, i);
         if (key == 'info') {

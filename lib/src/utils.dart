@@ -3,10 +3,28 @@ import 'dart:convert';
 import 'package:dtorrent_task_v2/dtorrent_task_v2.dart';
 
 String generatePeerId([String prefix = idPrefix]) {
+  if (prefix.length != 8 || prefix.codeUnits.any((byte) => byte > 255)) {
+    throw ArgumentError.value(
+      prefix,
+      'prefix',
+      'must contain exactly 8 single-byte characters',
+    );
+  }
   var r = randomBytes(9);
   var base64Str = base64Encode(r);
   var id = prefix + base64Str;
   return id;
+}
+
+String normalizePeerId(String peerId) {
+  if (peerId.length != 20 || peerId.codeUnits.any((byte) => byte > 255)) {
+    throw ArgumentError.value(
+      peerId,
+      'peerId',
+      'must contain exactly 20 single-byte characters',
+    );
+  }
+  return peerId;
 }
 
 List<int>? hexString2Buffer(String hexStr) {
