@@ -66,8 +66,11 @@ export 'src/standalone/dtorrent_tracker/torrent_announce_tracker.dart'
 export 'src/standalone/dht/standalone_dht.dart';
 export 'src/webtorrent/websocket_tracker.dart';
 
-/// Peer ID prefix
-const idPrefix = '-DT0201-';
+/// Fixed Azureus-style peer ID prefix for KostoriTorrent.
+const idPrefix = '-KT0001-';
+
+/// Client name advertised in the BEP 10 extended handshake.
+const clientName = 'kostoriTorrent';
 
 /// Current version number
 Future<String?> getTorrentTaskVersion() async {

@@ -1424,9 +1424,7 @@ abstract class Peer
     message.add(0);
     var d = <String, dynamic>{};
     d['yourip'] = address.address.rawAddress;
-    var version = await getTorrentTaskVersion();
-    version ??= '0.0.0';
-    d['v'] = 'Dart BT v$version';
+    d['v'] = clientName;
     d['m'] = localExtended;
     d['reqq'] = reqq;
     var m = encode(d);
