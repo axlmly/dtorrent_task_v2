@@ -50,5 +50,14 @@ void main() {
       piece.subPieceReceived(0, List<int>.filled(16, 1));
       expect(piece.isCompletelyDownloaded, isFalse);
     });
+
+    test('range can be complete when only part of a piece belongs to a file',
+        () {
+      final piece = Piece('00' * 20, 0, 32, 0, requestLength: 16);
+      piece.subPieceReceived(0, List<int>.filled(16, 1));
+      piece.writeComplete();
+      expect(piece.isRangeWritten(0, 16), isTrue);
+      expect(piece.isRangeWritten(16, 32), isFalse);
+    });
   });
 }

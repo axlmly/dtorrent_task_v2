@@ -41,6 +41,23 @@ class DownloadFile {
 
   bool get completelyFlushed => pieces.none((element) => !element.flushed);
   bool get completed => downloadedBytes == length;
+
+  /// Whether the file-relative byte interval [start, end) is verified on disk.
+  bool isRangeWritten(int start, int end) {
+    if (start < 0 || end > length || start >= end) return false;
+    final rangeStart = offset + start;
+    final rangeEnd = offset + end;
+    var covered = false;
+    for (final piece in pieces) {
+      if (piece.end <= rangeStart || piece.offset >= rangeEnd) continue;
+      final pieceStart = rangeStart > piece.offset ? rangeStart : piece.offset;
+      final pieceEnd = rangeEnd < piece.end ? rangeEnd : piece.end;
+      covered = true;
+      if (!piece.isRangeWritten(pieceStart, pieceEnd)) return false;
+    }
+    return covered;
+  }
+
   double get downloadProgress =>
       length == 0 ? 100 : downloadedBytes / length * 100;
 

@@ -157,6 +157,18 @@ class Piece {
     return _onDiskSubPieces.length == subPiecesCount;
   }
 
+  /// Whether the byte interval [start, end) in this piece is verified on disk.
+  /// A file can occupy only part of a piece in a multi-file torrent.
+  bool isRangeWritten(int start, int end) {
+    if (start < offset || end > this.end || start >= end) return false;
+    final first = (start - offset) ~/ _subPieceSize;
+    final last = (end - offset - 1) ~/ _subPieceSize;
+    for (var index = first; index <= last; index++) {
+      if (!_onDiskSubPieces.contains(index)) return false;
+    }
+    return true;
+  }
+
   // means the pieces are completely in memory but not validated or written to disk
   bool get isCompletelyDownloaded {
     if (subPiecesCount == 0) return false;
